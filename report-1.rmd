@@ -1,0 +1,486 @@
+---
+title: "Rebrickable analysis"
+author: "Adam Korba, Krzysztof Szała"
+date: "2023-04-20"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+```{r echo=FALSE}
+ knitr::include_graphics("rebrickable/PP_logotyp_ANG_RGB.png")
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Executive summary
+This document presents a data analysis of Rebrickable data set, which is basically a catalog of LEGO Sets, Parts, Colors and various relationships. The goal of the analysis was to identify interesting patterns and relationships in the data.
+
+Key findings from the analysis include:
+
+1. Skeleton is the most common minifigure in LEGO sets.
+2. The most common color of LEGO parts is black. 
+3. Quite surprising is that the most common part category is "Technic Pins" in spare parts and normal.
+4. In 2016 LEGO released the most Star Wars sets and 
+5. In set Collectible Minifigures number of parts is almost always between 6 and 11. 
+
+
+```{r echo=FALSE, include=FALSE}
+library(ggplot2)
+library(ggiraph)
+library(knitr)
+library(tidyr)
+library(dplyr)
+library(plotly)
+library(treemapify)
+```
+
+```{r echo=FALSE}
+#Some of the most common colors in lego
+lego_palette <- c("#FAC80A", "#B40000", "#D67923", "#D3359D", "#1E5AA8", "#469BC3", "#E2F99A", "#58AB41", "#A5CA18", "#5F3109", "#BB805A", "#F4F4F4")
+```
+# Most common minifigures
+This chart presents which minifigures occur most often in LEGO sets,
+hover on each bar to see the image of particular minifigure
+```{r echo=FALSE}
+inventory_minifigs <- data.frame(read.csv("rebrickable/inventory_minifigs.csv"))
+minifigs <- data.frame(read.csv("rebrickable/minifigs.csv"))
+
+popular_minifigs <- inventory_minifigs %>%
+  group_by(fig_num) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count)) %>%
+  inner_join(minifigs, by = "fig_num") %>%
+  select(name, count, img_url) %>%
+  head(n = 12)
+
+
+get_html_for_minifig <- function(name, n, img_url) {
+    paste0(
+        "<div style='
+            width: 250px;
+            height: auto;
+            text-align: center;
+            padding: 10px;
+            border: 1px solid black;
+            background-color: white;'>",
+        "<img src='", img_url, "' 
+            style='width: 100%;
+            height: auto;
+            margin-bottom: 10px;'/>",
+        "<p style='margin: 0px;
+            color: black;'>", name, "</p>",
+        "<p style='margin: 0px;
+            color: black;
+            font-size: 18px;'>
+            Found in: <strong>", n, "</strong> sets
+        </p>",
+        "</div>"
+    )
+}
+
+
+fig <- popular_minifigs %>%
+    ggplot(aes(
+        x = reorder(name, count),
+        y = count,
+        tooltip = get_html_for_minifig(name, count, img_url),
+        data_id = name
+    )) + geom_col_interactive(
+        fill = "#FAC80A",
+        width = 0.8
+    ) + theme_minimal() +
+        scale_x_discrete(labels = function(x) {
+            sapply(strsplit(x, ","), "[", 1)
+        }) +
+        coord_flip() +
+        labs(x = "Minifigure",
+             y = "Number of occurences")
+
+x <- girafe(ggobj = fig)
+x <- girafe_options(x,
+  opts_hover(css = "fill:#B40000;", reactive = TRUE))
+
+x
+```
+# Distribution of number of parts in sets
+This chart visualizes distribution of number of parts in each set of some theme. We took only subset of points not to clutter the plot. Hover on each point to see an image of particular set. We guaranteed that top 10 biggest sets in each theme are always present because they usually look cool.
+```{r echo=FALSE,message=F}
+themes <- data.frame(read.csv("rebrickable/themes.csv"))
+sets <- data.frame(read.csv("rebrickable/sets.csv"))
+
+get_top_level_theme <- function(theme_id, df) {
+  parent_id <- themes[themes$id == theme_id, "parent_id"]
+  if (is.na(parent_id)) {
+    return(themes[themes$id == theme_id, "name"])
+  } else {
+    return(get_top_level_theme(parent_id, themes))
+  }
+}
+
+themes_with_top_level <- themes %>%
+    mutate(top_level_theme = sapply(id, get_top_level_theme, themes))
+
+#Filter only the themes with more than 100 sets
+df <- sets %>%
+  inner_join(themes_with_top_level, by = c("theme_id" = "id")) %>%
+  select(top_level_theme, num_parts, img_url) %>%
+  filter(num_parts > 0) %>%
+  group_by(top_level_theme) %>%
+  filter(n() > 450) %>%
+  ungroup()
+
+# get list of themes with mean number of parts
+theme_means <- df %>%
+  group_by(top_level_theme) %>%
+  summarize(mean = mean(num_parts)) %>%
+  arrange(desc(mean))
+
+get_html_for_set <- function(img_url, num_parts) {
+    paste0(
+        "<div style='
+            width: 250px;
+            height: auto;
+            text-align: center;
+            padding: 10px;
+            border: 1px solid black;
+            background-color: white;'>",
+        "<img src='", img_url, "' 
+            style='width: 100%;
+            height: auto;
+            margin-bottom: 10px;'/>",
+        "<p style='margin: 0px;
+            color: black;'>
+            Number of parts: <strong>", num_parts, "</strong>
+            </p>",
+        "</div>"
+    )
+}
+
+subset_top <- function(df, prop) {
+  top_rows <- c()
+  for (g in unique(df$top_level_theme)) {
+    g_rows <- which(df$top_level_theme == g)
+    n_g <- length(g_rows)
+    n_top <- max(1, round(prop * n_g))
+    top_rows <- c(
+      top_rows,
+      g_rows[order(df$num_parts[g_rows],
+      decreasing = TRUE)[1:10]])
+    remaining_rows <- g_rows[-which(g_rows %in% top_rows)]
+    if (length(remaining_rows) > 0) {
+      top_rows <- c(top_rows, sample(remaining_rows, n_top - 1))
+    }
+  }
+  return(df[top_rows, ])
+}
+
+# create violin plot with jittered points
+
+p <- ggplot(df,
+  aes(x = top_level_theme,
+      y = num_parts,
+      fill = top_level_theme)) +
+  geom_violin() +
+  geom_point_interactive(
+    aes(tooltip = get_html_for_set(img_url, num_parts)),
+    data = subset_top(df, 0.04),
+    size = 0.7,
+    position = position_jitter(seed = 1, width = 0.1)) +
+  scale_y_log10() +
+  scale_x_discrete(limits = theme_means$top_level_theme) +
+  scale_fill_manual(values=lego_palette) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none") +
+  labs(x = "Theme", y = "Number of parts [log scale]")
+
+girafe(ggobj = p)
+```
+
+# Number of LEGO sets released under each theme
+This graph presents distribution of some most popular themes in terms of how many sets were released each year. Feel free to toggle themes that interest you the most.
+```{r echo=FALSE, warning=FALSE, message=F}
+sets <- data.frame(read.csv("rebrickable/sets.csv"))
+
+themes_with_top_level <- themes %>%
+    mutate(top_level_theme = sapply(id, get_top_level_theme, themes))
+
+
+# Print themes sorted by the most common
+popular_sets <- sets %>%
+  inner_join(themes_with_top_level, by = c("theme_id" = "id")) %>%
+  group_by(top_level_theme) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+### Geom density - how many sets in each theme in each year
+themes_of_interest <- c("Town", "Friends", "City", "Duplo", "Star Wars", "Racers", "Space", "Ninjago", "Technic")
+visibility <- c(TRUE, "legendonly", "legendonly", TRUE, TRUE, TRUE, TRUE, "legendonly", TRUE)
+
+
+df <- sets %>%
+  inner_join(themes_with_top_level, by = c("theme_id" = "id")) %>%
+  select(top_level_theme, year) %>%
+  filter(top_level_theme %in% themes_of_interest)
+
+
+### PLOT
+gg <- ggplot(df,
+  aes(
+    x = year,
+    stat(count),
+    fill = top_level_theme)
+  ) + geom_density(
+    alpha = 0.7) +
+    labs(
+      x = "Year",
+      y = "Number of sets released",
+      fill = "Theme"
+    ) + scale_fill_manual(values=lego_palette)
+
+
+p <- ggplotly(gg)
+
+for (i in seq_along(p$x$data)) {
+  name <- p$x$data[[i]]$name
+  if (name %in% themes_of_interest) {
+    index <- match(name, themes_of_interest)
+    p$x$data[[i]]$visible <- visibility[index]
+  }
+}
+
+p
+```
+
+# Tree of themes
+Themes might be sub-themes, tree-map below shows some of the most popular themes and their subthemes.
+```{r echo=FALSE}
+### Get themes with their parents
+themes <- data.frame(read.csv("rebrickable/themes.csv"))
+themes_with_parents <- themes %>%
+    left_join(themes, by = c("parent_id" = "id")) %>%
+    select(name.x, name.y) %>%
+    rename(theme = name.x, parent = name.y) %>%
+    replace_na(list(parent = "")) %>%
+    head(74)
+
+
+fig <- plot_ly(
+    type = "treemap",
+    labels = themes_with_parents$theme,
+    parents = themes_with_parents$parent
+)
+
+fig
+```
+
+Tree map with all present themes, showing the difference between number of sets produced per theme and the number of sub-themes per theme.
+
+
+```{r echo=FALSE}
+themes <- data.frame(read.csv("rebrickable/themes.csv"))
+sets <- data.frame(read.csv("rebrickable/sets.csv"))
+# 1. Join sets.csv with themes.csv
+df_sets_and_themes = inner_join(sets, themes, by=c("theme_id" = "id"))
+
+no_sets_per_theme_cat <- df_sets_and_themes %>%
+  group_by(theme_category = ifelse(is.na(parent_id), theme_id, parent_id)) %>%
+  summarize(count = n()) %>% arrange(theme_category) %>%
+  inner_join(themes, by = c("theme_category" = "id")) %>%
+  select(theme_name = name, no_sets_per_theme = count, theme_category) %>% 
+  mutate(percentage_gt_1 = ((no_sets_per_theme/sum(no_sets_per_theme)) > 0.01))
+
+# I would like to have also number of themes per theme_category
+no_themes_per_theme_cat <- themes %>%
+  group_by(theme_category = ifelse(is.na(parent_id), id, parent_id)) %>%
+  summarise(no_themes_per_theme_category = n())
+
+filtered_setsXthemes <- inner_join(no_sets_per_theme_cat,no_themes_per_theme_cat,by="theme_category") %>%
+  select(theme_category = theme_name, no_sets_per_theme, no_themes_per_theme_category) %>% 
+  mutate(percentage_gt_1 = ((no_sets_per_theme/sum(no_sets_per_theme)) > 0.01))
+
+filtered_setsXthemes$bins <- cut(filtered_setsXthemes$no_themes_per_theme_category, breaks = 6)
+# colors <- c("#fdae61", "#fee08b", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850")
+# colors <- rev(colors)
+colors <- colorRampPalette(c("#FAC80A", "#B40000"))(6)
+
+ggplot(filtered_setsXthemes, 
+       aes(area = no_sets_per_theme, fill = bins, label = theme_category)) +
+  geom_treemap(color = "black", show.legend=T) +
+  geom_treemap_text(grow = T, reflow = T, colour = "black") + 
+  scale_fill_manual(values = colors, guide = "legend") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, vjust = 2, size = 20)) +
+  labs(
+    title = "Number of sets and number of sub-themes per theme",
+    caption = "The area of each tile represents how much sets was released
+               per this theme in comparison to all other themes",
+    fill = "Number of sub-themes per theme"
+  )
+```
+
+# Part's colors
+```{r echo=FALSE, message=F, warning=F}
+inventory_parts <- data.frame(read.csv("rebrickable/inventory_parts.csv"))
+colors <- data.frame(read.csv("rebrickable/colors.csv"))
+
+color_parts <-inner_join(inventory_parts, colors %>% select(id,rgb), by = c("color_id" = "id")) %>%
+  select(color_id, rgb) %>% group_by(color_id,rgb) %>% summarise(count = n()) %>%
+  arrange(desc(count)) %>% head(n=12)
+
+color_parts$rgb <- paste0("#", color_parts$rgb)
+
+# Create the ggplot object
+p <- ggplot(color_parts, aes(x = reorder(rgb, desc(count)), y = count, fill = rgb)) +
+  geom_bar(stat = "identity", color = "black", width = 0.7) +
+  scale_fill_identity() +
+  labs(x = "RGB Colors", y = "Number of parts") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    title = "This chart presents which colors are the most common in LEGO"
+  )
+
+# Print the plot
+print(p)
+```
+
+# Grouped bar plots
+The most frequent parts in inventory from the most interesting within 5 the most frequent part categories, hover on each bar to see the image of particular part. 
+
+```{r echo=FALSE, warning=FALSE, message=F}
+inventory_parts <- data.frame(read.csv("rebrickable/inventory_parts.csv"))
+parts <- data.frame(read.csv("rebrickable/parts.csv"))
+elements <- data.frame(read.csv("rebrickable/elements.csv"))
+part_categories <- data.frame(read.csv("rebrickable/part_categories.csv"))
+
+lego_palette <- c("#FAC80A", "#B40000", "#D67923", "#D3359D", "#1E5AA8")
+color_vector <- c(rep(lego_palette, each = 6))
+
+get_html_for_part <- function(name, n, img_url) {
+  paste0(
+    "<div style='
+            width: 250px;
+            height: auto;
+            text-align: center;
+            padding: 10px;
+            border: 1px solid black;
+            background-color: white;'>",
+    "<img src='", img_url, "' 
+            style='width: 100%;
+            height: auto;
+            margin-bottom: 10px;'/>",
+    "<p style='margin: 0px;
+            color: black;'>", name, "</p>",
+    "<p style='margin: 0px;
+            color: black;
+            font-size: 18px;'>
+            Found in: <strong>", n, "</strong> sets
+        </p>",
+    "</div>"
+  )
+}
+
+top_parts <- parts %>% select(part_num,name,part_cat_id) %>%
+  inner_join(y = inventory_parts %>%
+               select(part_num, quantity, is_spare, img_url), multiple = "all", by = "part_num") %>%
+  group_by(part_num,name,part_cat_id,is_spare,img_url) %>%
+  summarize(inventory_freq = sum(quantity)) %>%
+  group_by(part_cat_id, is_spare) %>%
+  top_n(6, inventory_freq) %>%
+  arrange(part_cat_id, is_spare, desc(inventory_freq))
+
+bar_charts_order <- top_parts %>% select(part_cat_id,inventory_freq) %>%
+  group_by(part_cat_id) %>% summarize(cat_freq = sum(inventory_freq)) %>%
+  arrange(desc(cat_freq)) %>% top_n(5, cat_freq)  %>%
+  inner_join(y = part_categories,by = c("part_cat_id" = "id")) 
+
+final_data1 <- bar_charts_order %>% inner_join(y = top_parts, multiple = "all", by = "part_cat_id")
+final_data1_copy <- mutate(final_data1) # to not be caught in shallow copy
+
+final_data1 <- final_data1 %>% filter(is_spare == 'f') %>% 
+  filter(part_cat_id %in% c(53,11,14))
+
+final_data2 <- final_data1_copy %>% filter(is_spare == 't') %>% 
+  arrange(name.x, is_spare, desc(inventory_freq)) %>% 
+  filter(part_cat_id %in% c(53,21,14))
+
+final_data1 <- final_data1 %>%
+  mutate(suffix = rep(1:6, length.out = n())) %>%
+  mutate(is_spare = paste0(is_spare, "_", suffix))
+
+final_data2 <- final_data2 %>%
+  mutate(suffix = rep(1:6, length.out = n())) %>%
+  mutate(is_spare = paste0(is_spare, "_", suffix))
+
+fig <- final_data1 %>% 
+  ggplot(aes(
+    x = name.x,
+    y = inventory_freq,
+    tooltip = get_html_for_part(name.y, inventory_freq, img_url),
+    data_id = name.x
+  )) + 
+  geom_bar_interactive(
+    position = position_dodge(width = 0.8),
+    stat = "identity",
+    fill = color_vector[1:18],
+    width = 0.8,
+    color = "black"
+  ) + 
+  theme_minimal() + 
+  scale_x_discrete(labels = function(x) {
+    sapply(strsplit(x, ","), "[", 1)
+  }) +
+  labs(x = "Part Category",
+       y = "Number of occurrences in inventory",
+       title = "Normal part frequencies in most frequent part categories",
+       fill = "Spare Part") +
+  guides(fill = guide_legend(title = "Spare Part")) +
+  theme(legend.position = "bottom") +
+  theme_classic() +
+  scale_y_continuous()
+
+x <- girafe(ggobj = fig)
+x <- girafe_options(x, opts_hover(css = "fill:#B40000;", reactive = TRUE))
+x
+
+fig2 <- final_data2 %>% 
+  ggplot(aes(
+    x = name.x,
+    y = inventory_freq,
+    tooltip = get_html_for_part(name.y, inventory_freq, img_url),
+    data_id = name.x
+  )) + 
+  geom_bar_interactive(
+    position = position_dodge(width = 0.8),
+    stat = "identity",
+    fill = color_vector[1:18],
+    width = 0.8,
+    color = "black"
+  ) + 
+  theme_minimal() + 
+  scale_x_discrete(labels = function(x) {
+    sapply(strsplit(x, ","), "[", 1)
+  }) +
+  labs(x = "Part Category",
+       y = "Number of occurrences in inventory",
+       title = "Spare part frequencies in most frequent part categories",
+       fill = "Spare Part") +
+  guides(fill = guide_legend(title = "Spare Part")) +
+  theme(legend.position = "bottom") +
+  theme_classic() +
+  scale_y_continuous()
+
+y <- girafe(ggobj = fig2)
+y <- girafe_options(y, opts_hover(css = "fill:#B40000;", reactive = TRUE))
+y
+```
+
+
